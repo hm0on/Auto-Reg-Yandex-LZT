@@ -3,12 +3,14 @@ GUI приложение на Flet
 """
 
 import flet as ft
+import time
 from datetime import datetime
 from pathlib import Path
 import threading
 from typing import Optional
 
 from core import YandexRegistrar, SpanchSMS, ProxyManager, UserAgentManager, NumberManager
+from core.number_manager import normalize_phone
 import config
 
 
@@ -38,6 +40,13 @@ class YandexRegisterApp:
         self.sms_code_input: Optional[ft.TextField] = None
         self.sms_code_event: threading.Event = threading.Event()
         self.manual_sms_code: Optional[str] = None
+
+        # Окно ручного ввода номеров
+        self.manual_numbers_dialog: Optional[ft.AlertDialog] = None
+        self.manual_number_input: Optional[ft.TextField] = None
+        self.manual_numbers_display: Optional[ft.Column] = None
+        self._manual_numbers_list: list = []
+        self._manual_file_picker: Optional[ft.FilePicker] = None
         
     def _on_pubsub_message(self, message: dict) -> None:
         """Обработчик сообщений pubsub (выполняется в UI потоке)"""
@@ -74,8 +83,14 @@ class YandexRegisterApp:
             self.logs_container.auto_scroll = True
         else:
             self.logs_container.auto_scroll = False
-            
-        self.page.update()
+
+        try:
+            self.page.update(self.logs_container)
+        except (IndexError, Exception):
+            try:
+                self.page.update()
+            except Exception:
+                pass
         
     def log(self, message: str) -> None:
         """Добавить сообщение в лог (thread-safe)"""
@@ -108,7 +123,13 @@ class YandexRegisterApp:
         """Обновить статус в UI"""
         if self.status_text and self.page:
             self.status_text.value = text
-            self.page.update()
+            try:
+                self.page.update(self.status_text)
+            except (IndexError, Exception):
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
         
     def update_status(self, text: str) -> None:
         """Обновить статус (thread-safe)"""
@@ -129,10 +150,13 @@ class YandexRegisterApp:
             self.sms_mode_dropdown.disabled = running
         if self.use_proxy_switch:
             self.use_proxy_switch.disabled = running
-            
+
         if self.page:
-            self.page.update()
-            
+            try:
+                self.page.update()
+            except (IndexError, Exception):
+                pass
+
     def set_running_state(self, running: bool) -> None:
         """Установить состояние работы (thread-safe)"""
         if self.page:
@@ -152,7 +176,7 @@ class YandexRegisterApp:
             text_size=24,
         )
         
-        # Создаём диалог
+        # Создаём диалог (используем show_dialog/pop_dialog, чтобы кнопки корректно закрывали окно)
         self.sms_code_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Введите SMS код"),
@@ -170,27 +194,26 @@ class YandexRegisterApp:
                     color=ft.Colors.WHITE,
                 ),
                 ft.TextButton(
-                    "Отмена",
+                    content="Отмена",
                     on_click=self._on_sms_code_cancel,
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
         
-        self.page.overlay.append(self.sms_code_dialog)
-        self.sms_code_dialog.open = True
-        self.page.update()
+        self.page.show_dialog(self.sms_code_dialog)
     
     def _destroy_sms_dialog(self) -> None:
-        """Уничтожить диалог ввода SMS"""
-        if self.sms_code_dialog:
-            self.sms_code_dialog.open = False
-            if self.page and self.sms_code_dialog in self.page.overlay:
-                self.page.overlay.remove(self.sms_code_dialog)
-            self.sms_code_dialog = None
-            self.sms_code_input = None
+        """Закрыть диалог ввода SMS (по таймауту или принудительно)"""
+        try:
             if self.page:
-                self.page.update()
+                self.page.pop_dialog()
+        except Exception:
+            pass
+        self.sms_code_dialog = None
+        self.sms_code_input = None
+        if self.page:
+            self.page.update()
     
     def _on_sms_code_submit(self, e=None) -> None:
         """Обработчик нажатия 'Готово' в диалоге"""
@@ -206,11 +229,144 @@ class YandexRegisterApp:
                 self.page.update()
     
     def _on_sms_code_cancel(self, e=None) -> None:
-        """Обработчик нажатия 'Отмена' в диалоге"""
+        """Обработчик нажатия 'Отмена' в диалоге — закрываем через pop_dialog"""
         self.manual_sms_code = None
-        self._destroy_sms_dialog()
-        self.sms_code_event.set()  # Сигнализируем рабочему потоку
-    
+        try:
+            if self.page:
+                self.page.pop_dialog()
+        except Exception:
+            pass
+        self.sms_code_dialog = None
+        self.sms_code_input = None
+        self.sms_code_event.set()
+
+    # --- Окно ручного ввода номеров ---
+
+    def _on_remove_manual_number(self, number: str) -> None:
+        """Удалить номер из списка и из файла"""
+        if number not in self._manual_numbers_list:
+            return
+        self._manual_numbers_list.remove(number)
+        path = Path(config.NUMBERS_FILE)
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            with open(path, "w", encoding="utf-8") as f:
+                for line in lines:
+                    if line.strip() and not line.strip().startswith("#"):
+                        if normalize_phone(line.strip()) != number:
+                            f.write(line)
+                    else:
+                        f.write(line)
+        self._refresh_manual_numbers_display()
+        if self.page:
+            self.page.update()
+
+    def _refresh_manual_numbers_display(self) -> None:
+        """Обновить список номеров в диалоге"""
+        if self.manual_numbers_display:
+            self.manual_numbers_display.controls = []
+            for n in self._manual_numbers_list:
+                delete_btn = ft.ElevatedButton(
+                    "×",
+                    on_click=lambda e, num=n: self._on_remove_manual_number(num),
+                )
+                self.manual_numbers_display.controls.append(
+                    ft.Row(
+                        [
+                            ft.Text(f"+{n}", size=12),
+                            ft.Container(expand=True),
+                            delete_btn,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    )
+                )
+            if self.page:
+                self.page.update()
+
+    def _open_manual_numbers_dialog(self, e=None) -> None:
+        """Открыть окно ручного ввода номеров и загрузить текущий список из файла"""
+        path = Path(config.NUMBERS_FILE)
+        self._manual_numbers_list = []
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        n = normalize_phone(line)
+                        if n:
+                            self._manual_numbers_list.append(n)
+        if self.manual_number_input:
+            self.manual_number_input.value = ""
+        self._refresh_manual_numbers_display()
+        if self.manual_numbers_dialog:
+            self.manual_numbers_dialog.open = True
+            if self.page:
+                self.page.update()
+
+    def _close_manual_numbers_dialog(self, e=None) -> None:
+        """Закрыть окно ручного ввода номеров"""
+        if self.manual_numbers_dialog:
+            self.manual_numbers_dialog.open = False
+            if self.page:
+                self.page.update()
+
+    def _on_manual_add_number(self, e=None) -> None:
+        """Добавить введённый номер в список и в файл"""
+        if not self.manual_number_input:
+            return
+        raw = (self.manual_number_input.value or "").strip()
+        if not raw:
+            return
+        n = normalize_phone(raw)
+        if not n:
+            self.manual_number_input.error_text = "Некорректный номер (ожидается 11 цифр РФ)"
+            if self.page:
+                self.page.update()
+            return
+        self.manual_number_input.error_text = None
+        self.manual_number_input.value = ""
+        self._manual_numbers_list.append(n)
+        path = Path(config.NUMBERS_FILE)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(n + "\n")
+        self._refresh_manual_numbers_display()
+        if self.page:
+            self.page.update()
+
+    async def _on_manual_import_click(self, e=None) -> None:
+        """Выбрать файл и импортировать номера (Flet 0.80+: pick_files — async, возвращает список)"""
+        if not self._manual_file_picker or not self.page:
+            return
+        files = await self._manual_file_picker.pick_files(
+            allow_multiple=False,
+            dialog_title="Выберите файл с номерами",
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["txt"],
+        )
+        if not files:
+            return
+        path = Path(getattr(files[0], "path", None) or files[0].name)
+        if not path.exists():
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    n = normalize_phone(line)
+                    if n:
+                        self._manual_numbers_list.append(n)
+                        with open(config.NUMBERS_FILE, "a", encoding="utf-8") as out:
+                            out.write(n + "\n")
+        self._refresh_manual_numbers_display()
+        self.page.update()
+
+    def _on_sms_mode_change(self, e=None) -> None:
+        """При выборе ручного режима открыть окно ввода номеров"""
+        if self.sms_mode_dropdown and self.sms_mode_dropdown.value == "manual":
+            self._open_manual_numbers_dialog()
+
     def request_manual_sms_code(self, phone: str) -> Optional[str]:
         """
         Запросить ручной ввод SMS кода (вызывается из рабочего потока)
@@ -223,19 +379,24 @@ class YandexRegisterApp:
         """
         self.manual_sms_code = None
         self.sms_code_event.clear()
-        
+
         # Показываем диалог через pubsub
         if self.page:
             self.page.pubsub.send_all({"action": "show_dialog", "data": phone})
-        
-        # Ждём пока пользователь введёт код (с таймаутом)
-        if self.sms_code_event.wait(timeout=config.MANUAL_SMS_TIMEOUT):
-            return self.manual_sms_code
-        else:
-            # Таймаут - закрываем диалог
-            if self.page:
-                self.page.pubsub.send_all({"action": "close_dialog", "data": None})
-            return None
+
+        # Ждём ввод кода по 1 сек, чтобы «Остановить» срабатывал быстро
+        start = time.time()
+        while time.time() - start < config.MANUAL_SMS_TIMEOUT:
+            if self.stop_requested:
+                if self.page:
+                    self.page.pubsub.send_all({"action": "close_dialog", "data": None})
+                return None
+            if self.sms_code_event.wait(timeout=1):
+                return self.manual_sms_code
+        # Таймаут — закрываем диалог
+        if self.page:
+            self.page.pubsub.send_all({"action": "close_dialog", "data": None})
+        return None
         
     def start_registration(self, e=None) -> None:
         """Начать регистрацию"""
@@ -357,7 +518,8 @@ class YandexRegisterApp:
             options=[
                 ft.dropdown.Option("auto", "Автоматический (API)"),
                 ft.dropdown.Option("manual", "Ручной"),
-            ]
+            ],
+            on_select=self._on_sms_mode_change,
         )
         
         # Переключатель прокси
@@ -417,6 +579,54 @@ class YandexRegisterApp:
             padding=10,
             auto_scroll=True
         )
+
+        # Окно ручного ввода номеров (открывается при выборе "Ручной")
+        self.manual_number_input = ft.TextField(
+            label="Номер телефона",
+            hint_text="79XXXXXXXXX или +79XXXXXXXXX",
+            width=320,
+            keyboard_type=ft.KeyboardType.PHONE,
+        )
+        self.manual_numbers_display = ft.Column([], scroll=ft.ScrollMode.AUTO, tight=True)
+        self._manual_file_picker = ft.FilePicker()
+
+        self.manual_numbers_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Номера для ручного режима"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        self.manual_number_input,
+                        ft.Row(
+                            [
+                                ft.ElevatedButton(
+                                    "Добавить",
+                                    icon="add",
+                                    on_click=self._on_manual_add_number,
+                                ),
+                                ft.ElevatedButton(
+                                    "Импортировать номера",
+                                    icon="upload_file",
+                                    on_click=self._on_manual_import_click,
+                                ),
+                            ],
+                            spacing=10,
+                        ),
+                        ft.Text("Добавленные номера:", size=12, color=ft.Colors.GREY_400),
+                        ft.Container(content=self.manual_numbers_display, height=150),
+                    ],
+                    tight=True,
+                    spacing=10,
+                ),
+                width=400,
+            ),
+            actions=[
+                ft.ElevatedButton("Готово", on_click=self._close_manual_numbers_dialog)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(self.manual_numbers_dialog)
+        page.services.append(self._manual_file_picker)
         
         # Компоновка
         page.add(
@@ -475,4 +685,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(main)
+    ft.run(main)

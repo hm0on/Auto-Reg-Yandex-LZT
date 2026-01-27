@@ -151,6 +151,13 @@ class SpanchSMS:
             except requests.exceptions.ConnectionError:
                 last_error = "Connection error: не удалось подключиться к серверу"
             except requests.exceptions.HTTPError as e:
+                # Пытаемся получить JSON с сообщением об ошибке
+                try:
+                    error_data = e.response.json()
+                    if error_data.get("status") == "error":
+                        return error_data
+                except (json.JSONDecodeError, ValueError):
+                    pass
                 last_error = f"HTTP error: {e.response.status_code}"
             except requests.RequestException as e:
                 last_error = f"Request error: {str(e)}"
@@ -294,13 +301,12 @@ class SpanchSMS:
             "action": "getNumber",
             "service": (service or config.SMS_SERVICE).lower(),
             "country": (country or config.SMS_COUNTRY).lower(),
-            "gateway": (gateway or config.SMS_GATEWAY).lower()
+            "gateway": (gateway or config.SMS_GATEWAY).lower(),
+            "maxPrice": max_price if max_price is not None else config.SMS_MAX_PRICE
         }
         
         if operator:
             params["operator"] = operator
-        if max_price is not None:
-            params["maxPrice"] = max_price
         if route:
             params["route"] = route
             

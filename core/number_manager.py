@@ -7,6 +7,23 @@ from pathlib import Path
 import config
 
 
+def normalize_phone(number: str) -> Optional[str]:
+    """
+    Нормализовать номер телефона (для использования в GUI и при импорте).
+    Поддерживаемые форматы: +79001234567, 79001234567, 89001234567, 9001234567
+    """
+    cleaned = "".join(c for c in number if c.isdigit() or c == "+")
+    if cleaned.startswith("+"):
+        cleaned = cleaned[1:]
+    if cleaned.startswith("8") and len(cleaned) == 11:
+        cleaned = "7" + cleaned[1:]
+    if len(cleaned) == 10:
+        cleaned = "7" + cleaned
+    if len(cleaned) == 11 and cleaned.startswith("7"):
+        return cleaned
+    return None
+
+
 class NumberManager:
     """Менеджер номеров - последовательный выбор из файла"""
     
@@ -29,41 +46,9 @@ class NumberManager:
                 line = line.strip()
                 # Пропускаем пустые строки и комментарии
                 if line and not line.startswith("#"):
-                    # Нормализуем номер
-                    number = self._normalize_number(line)
+                    number = normalize_phone(line)
                     if number:
                         self.numbers.append(number)
-                        
-    def _normalize_number(self, number: str) -> Optional[str]:
-        """
-        Нормализовать номер телефона
-        
-        Поддерживаемые форматы:
-        - +79001234567
-        - 79001234567
-        - 89001234567
-        - 9001234567
-        """
-        # Убираем все кроме цифр и +
-        cleaned = ''.join(c for c in number if c.isdigit() or c == '+')
-        
-        # Убираем + если есть
-        if cleaned.startswith('+'):
-            cleaned = cleaned[1:]
-        
-        # Если начинается с 8, заменяем на 7
-        if cleaned.startswith('8') and len(cleaned) == 11:
-            cleaned = '7' + cleaned[1:]
-        
-        # Если 10 цифр (без кода страны), добавляем 7
-        if len(cleaned) == 10:
-            cleaned = '7' + cleaned
-        
-        # Проверяем длину (должно быть 11 цифр для РФ)
-        if len(cleaned) == 11 and cleaned.startswith('7'):
-            return cleaned
-        
-        return None
                     
     def reload(self) -> None:
         """Перезагрузить список номеров"""
@@ -112,7 +97,7 @@ class NumberManager:
             if cleaned.startswith("#") or not cleaned:
                 new_lines.append(line)
                 continue
-            normalized = self._normalize_number(cleaned)
+            normalized = normalize_phone(cleaned)
             if normalized != number:
                 new_lines.append(line)
         

@@ -10,6 +10,7 @@ SPANCH_API_KEY = ""
 SMS_SERVICE = "yandex"  # Название сервиса для Spanch API
 SMS_COUNTRY = "ru"      # Страна для номера
 SMS_GATEWAY = "bob"     # Шлюз (можно изменить: crabbs, bob, ocean, gary, plankton, squidward, sandy, patrick)
+SMS_MAX_PRICE = 1       # Максимальная цена номера в USD (баланс должен быть >= этой суммы)
 
 # Таймауты (в секундах)
 SMS_WAIT_TIMEOUT = 120  # Время ожидания SMS
@@ -18,7 +19,7 @@ PAGE_LOAD_TIMEOUT = 30  # Таймаут загрузки страницы
 ELEMENT_TIMEOUT = 10    # Таймаут ожидания элемента
 
 # Настройки браузера (Camoufox)
-HEADLESS_MODE = True    # Запуск браузера в фоновом режиме
+HEADLESS_MODE = False    # Запуск браузера в фоновом режиме
 BROWSER_LOCALE = "ru-RU"  # Локаль браузера
 BROWSER_TIMEZONE = "Europe/Moscow"  # Таймзона
 

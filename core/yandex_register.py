@@ -31,7 +31,7 @@ class YandexRegistrar:
     SEL_CODE_INPUT = "#passp-field-phoneCode"
     SEL_CODE_SUBMIT = "[data-t='button:action']"
     SEL_NO_CALL_BUTTON = "[data-t='button:default:retry-to-request-code']"
-    
+
     # Капча
     SEL_CAPTCHA_IMAGE = "#captcha-image"
     SEL_CAPTCHA_INPUT = "#passp-field-captcha"
@@ -62,7 +62,8 @@ class YandexRegistrar:
     SEL_CLOSE_GOSUSLUGI = "[data-testid='button'][aria-label='Закрыть']"
     
     # Таймауты
-    WAIT_NO_CALL_TIMEOUT = 70  # секунд (кнопка появляется через ~60 сек)
+    WAIT_BEFORE_NO_CALL_SEC = 70  # ждать минуту и 10 сек перед кликом «Звонка не было»
+    WAIT_NO_CALL_TIMEOUT = 130   # общий таймаут: 70 сек ожидания + до 60 сек на появление кнопки
     
     def __init__(
         self,
@@ -267,7 +268,37 @@ class YandexRegistrar:
             return False
         except Exception:
             return False
-    
+
+    def _has_change_number_button(self) -> bool:
+        """Проверить наличие кнопки «Изменить номер» — номер уже зарегистрирован в Яндексе"""
+        if not self.page:
+            return False
+        try:
+            return self.page.get_by_role("button", name="Изменить номер").count() > 0
+        except Exception:
+            return False
+
+    def _page_has_phone_already_registered(self) -> bool:
+        """Проверить, показывает ли страница «номер уже зарегистрирован» (кнопка «Изменить номер» или текст)"""
+        if not self.page:
+            return False
+        try:
+            if self._has_change_number_button():
+                return True
+            text = self.page.content().lower()
+            phrases = [
+                "уже зарегистрирован",
+                "уже привязан",
+                "учётная запись с этим номером",
+                "привязан к другому",
+                "зарегистрирован в другом",
+                "this phone is already",
+                "already registered",
+            ]
+            return any(p in text for p in phrases)
+        except Exception:
+            return False
+
     def _wait_for_element(self, selector: str, timeout: float = None, state: str = "visible") -> bool:
         """
         Ждать появления элемента
@@ -423,8 +454,12 @@ class YandexRegistrar:
         last_log_time = start_time
         
         while time.time() - start_time < config.SMS_WAIT_TIMEOUT:
+            if getattr(self, "_stop_flag", None) and self._stop_flag():
+                self.log("Остановка по запросу пользователя")
+                return None
+
             code_obj = self.sms_api.get_code_object(self.current_activation_id)
-            
+
             if code_obj:
                 if code_obj.received:
                     self.log(f"Получен код: {code_obj.code}")
@@ -533,31 +568,42 @@ class YandexRegistrar:
     
     def _wait_for_sms_option(self) -> bool:
         """
-        Ждать появления кнопки 'Звонка не было' / 'Выслать СМС'
-        
-        Яндекс сначала пытается позвонить, кнопка для SMS появляется через ~60 секунд
+        Ждать минуту и 10 секунд, затем нажать кнопку 'Звонка не было' / 'Выслать СМС'.
+        Яндекс сначала пытается позвонить; кнопка для SMS появляется через ~60 секунд.
+        Кликаем только после WAIT_BEFORE_NO_CALL_SEC, чтобы не вводить код в поле «последние 6 цифр звонящего».
         """
-        self.log("Ожидание кнопки 'Звонка не было'...")
+        before_sec = self.WAIT_BEFORE_NO_CALL_SEC
+        self.log(f"Ожидание {before_sec} сек перед кнопкой 'Звонка не было'...")
         
         start_time = time.time()
         while time.time() - start_time < self.WAIT_NO_CALL_TIMEOUT:
+            if getattr(self, "_stop_flag", None) and self._stop_flag():
+                self.log("Остановка по запросу пользователя")
+                return False
+
+            elapsed = time.time() - start_time
+
+            # Проверяем «номер уже зарегистрирован» (кнопка «Изменить номер») — отменяем активацию и берём другой
+            if self._page_has_phone_already_registered():
+                self.log("Номер уже зарегистрирован в Яндексе, отменяем активацию и берём другой")
+                self._cancel_current_activation()
+                return False
+
             # Проверяем капчу
             if self._check_captcha():
                 self.log("Обнаружена капча!")
                 return False
+
+            # Кнопку ищем и нажимаем только после заданной задержки
+            if elapsed >= before_sec:
+                if self._element_exists(self.SEL_NO_CALL_BUTTON):
+                    button = self.page.locator(self.SEL_NO_CALL_BUTTON)
+                    if button.is_enabled():
+                        self.log("Кнопка 'Звонка не было' доступна, нажимаем")
+                        return True
             
-            # Проверяем наличие кнопки
-            if self._element_exists(self.SEL_NO_CALL_BUTTON):
-                # Проверяем что кнопка кликабельна (не disabled)
-                button = self.page.locator(self.SEL_NO_CALL_BUTTON)
-                if button.is_enabled():
-                    self.log("Кнопка 'Звонка не было' доступна")
-                    return True
-            
-            # Логируем прогресс
-            elapsed = int(time.time() - start_time)
-            if elapsed % 15 == 0 and elapsed > 0:
-                self.log(f"Ожидание... ({elapsed} сек)")
+            if int(elapsed) % 15 == 0 and int(elapsed) > 0:
+                self.log(f"Ожидание... ({int(elapsed)} сек)")
             
             time.sleep(2)
         
@@ -595,14 +641,26 @@ class YandexRegistrar:
         """Нажать кнопку 'Продолжить' после ввода кода"""
         self.log("Подтверждение кода...")
         
-        if not self._wait_for_element(self.SEL_CODE_SUBMIT):
-            self.log("Кнопка подтверждения не найдена")
-            return False
+        if self._wait_for_element(self.SEL_CODE_SUBMIT, timeout=15):
+            try:
+                self.page.locator(self.SEL_CODE_SUBMIT).first.click()
+                time.sleep(2)
+                return True
+            except Exception:
+                pass
         
-        self.page.locator(self.SEL_CODE_SUBMIT).click()
-        time.sleep(2)
+        # Пробуем клик по кнопке с текстом "Продолжить"
+        try:
+            btn = self.page.get_by_role("button", name="Продолжить")
+            if btn.count() > 0:
+                btn.first.click()
+                time.sleep(2)
+                return True
+        except Exception:
+            pass
         
-        return True
+        self.log("Кнопка подтверждения не найдена")
+        return False
     
     def register_account(self) -> Optional[Dict[str, str]]:
         """
@@ -666,11 +724,17 @@ class YandexRegistrar:
             # ==================== Шаг 4: Нажимаем "Продолжить" ====================
             if not self._click_phone_submit():
                 return None
-            
+
+            time.sleep(2)
+            if self._page_has_phone_already_registered():
+                self.log("Номер уже зарегистрирован в Яндексе, отменяем активацию и берём другой")
+                self._cancel_current_activation()
+                return None
+
             if self._check_captcha():
                 self.log("Капча после отправки номера!")
                 return None
-            
+
             # ==================== Шаг 5: Ждём кнопку "Звонка не было" ====================
             if not self._wait_for_sms_option():
                 return None
@@ -701,7 +765,11 @@ class YandexRegistrar:
             
             # ==================== Шаг 9: Подтверждаем код ====================
             if not self._click_code_submit():
-                return None
+                # Возможно страница уже перешла (авто-отправка при вводе 6 цифр)
+                if self._element_exists(self.SEL_FOR_SELF_RADIO) or self._element_exists(self.SEL_FOR_WHOM_SUBMIT):
+                    self.log("Страница уже на шаге 'для кого аккаунт', продолжаем")
+                else:
+                    return None
             
             if self._check_captcha():
                 self.log("Капча после ввода кода!")
@@ -722,8 +790,28 @@ class YandexRegistrar:
             else:
                 self.log("Кнопка 'для себя' не найдена, возможно уже выбрано")
             
-            # Кнопка "Продолжить"
-            if not self._click_element(self.SEL_FOR_WHOM_SUBMIT):
+            # Кнопка "Продолжить" на шаге "для кого аккаунт"
+            clicked = self._click_element(self.SEL_FOR_WHOM_SUBMIT)
+            if not clicked:
+                try:
+                    btn = self.page.get_by_role("button", name="Продолжить")
+                    if btn.count() > 0:
+                        btn.first.click()
+                        clicked = True
+                        time.sleep(1)
+                except Exception:
+                    pass
+            if not clicked:
+                try:
+                    # Альтернатива: кнопка по data-testid или по тексту
+                    for sel in ["[data-testid='survey-for-whom-submit']", "button:has-text('Продолжить')"]:
+                        if self.page.locator(sel).count() > 0:
+                            self.page.locator(sel).first.click()
+                            clicked = True
+                            break
+                except Exception:
+                    pass
+            if not clicked:
                 self.log("Не удалось нажать 'Продолжить' на выборе типа")
                 return None
             
@@ -892,14 +980,15 @@ class YandexRegistrar:
         """
         self.use_proxy = use_proxy
         self.sms_mode = sms_mode
-        
+        self._stop_flag = stop_flag
+
         accounts = []
-        
+
         for i in range(count):
             if stop_flag and stop_flag():
                 self.log("Остановка по запросу пользователя")
                 break
-                
+
             self.log(f"\n{'='*40}")
             self.log(f"Регистрация аккаунта {i + 1}/{count}")
             self.log(f"{'='*40}")
@@ -914,11 +1003,15 @@ class YandexRegistrar:
                 # Отменяем текущую активацию если была
                 self._cancel_current_activation()
                 
-            # Пауза между регистрациями
+            # Пауза между регистрациями (проверяем stop на каждой секунде)
             if i < count - 1:
                 delay = random.uniform(3, 7)
                 self.log(f"Пауза {delay:.1f} сек...")
-                time.sleep(delay)
+                end_pause = time.time() + delay
+                while time.time() < end_pause:
+                    if stop_flag and stop_flag():
+                        break
+                    time.sleep(1)
                 
         self.log(f"\nГотово! Создано {len(accounts)}/{count} аккаунтов")
         return accounts
