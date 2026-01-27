@@ -1,0 +1,4 @@
+flet>=0.21.0
+requests>=2.31.0
+camoufox[geoip]>=0.4.0
+fake-useragent>=1.4.0
