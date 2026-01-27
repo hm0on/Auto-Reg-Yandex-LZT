@@ -367,6 +367,63 @@ class YandexRegisterApp:
         if self.sms_mode_dropdown and self.sms_mode_dropdown.value == "manual":
             self._open_manual_numbers_dialog()
 
+    # ==================== Диалог настроек ====================
+    def _open_settings_dialog(self, e=None) -> None:
+        """Открыть диалог настроек"""
+        # Обновляем значения из config
+        self.settings_api_key_field.value = config.SPANCH_API_KEY
+        self.settings_max_price_field.value = str(config.SMS_MAX_PRICE)
+        self.settings_headless_switch.value = config.HEADLESS_MODE
+        self.settings_dialog.open = True
+        self.page.update()
+    
+    def _close_settings_dialog(self, e=None) -> None:
+        """Закрыть диалог настроек без сохранения"""
+        self.settings_dialog.open = False
+        self.page.update()
+    
+    def _save_settings(self, e=None) -> None:
+        """Сохранить настройки"""
+        # Обновляем config в памяти
+        new_api_key = self.settings_api_key_field.value.strip()
+        try:
+            new_max_price = float(self.settings_max_price_field.value.strip())
+        except ValueError:
+            self.log("Ошибка: некорректная макс. цена SMS")
+            return
+        new_headless = self.settings_headless_switch.value
+        
+        config.SPANCH_API_KEY = new_api_key
+        config.SMS_MAX_PRICE = new_max_price
+        config.HEADLESS_MODE = new_headless
+        
+        # Сохраняем в файл config.py
+        config_path = Path(__file__).parent.parent / "config.py"
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith("SPANCH_API_KEY"):
+                    new_lines.append(f'SPANCH_API_KEY = "{new_api_key}"\n')
+                elif line.strip().startswith("SMS_MAX_PRICE"):
+                    new_lines.append(f"SMS_MAX_PRICE = {new_max_price}\n")
+                elif line.strip().startswith("HEADLESS_MODE"):
+                    new_lines.append(f"HEADLESS_MODE = {new_headless}\n")
+                else:
+                    new_lines.append(line)
+            
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+            
+            self.log("Настройки сохранены")
+        except Exception as ex:
+            self.log(f"Ошибка сохранения настроек: {ex}")
+        
+        self.settings_dialog.open = False
+        self.page.update()
+
     def request_manual_sms_code(self, phone: str) -> Optional[str]:
         """
         Запросить ручной ввод SMS кода (вызывается из рабочего потока)
@@ -580,6 +637,56 @@ class YandexRegisterApp:
             auto_scroll=True
         )
 
+        # Кнопка настроек
+        self.settings_button = ft.ElevatedButton(
+            "⚙",
+            tooltip="Настройки",
+            on_click=self._open_settings_dialog,
+            width=40,
+            height=40,
+        )
+        
+        # Диалог настроек
+        self.settings_api_key_field = ft.TextField(
+            label="Spanch API Key",
+            value=config.SPANCH_API_KEY,
+            width=400,
+            password=True,
+            can_reveal_password=True,
+        )
+        self.settings_max_price_field = ft.TextField(
+            label="Макс. цена SMS ($)",
+            value=str(config.SMS_MAX_PRICE),
+            width=150,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        self.settings_headless_switch = ft.Switch(
+            label="Скрытый режим браузера",
+            value=config.HEADLESS_MODE,
+        )
+        
+        self.settings_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Настройки"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        self.settings_api_key_field,
+                        self.settings_max_price_field,
+                        self.settings_headless_switch,
+                    ],
+                    tight=True,
+                    spacing=15,
+                ),
+                width=450,
+            ),
+            actions=[
+                ft.TextButton("Отмена", on_click=self._close_settings_dialog),
+                ft.ElevatedButton("Сохранить", on_click=self._save_settings),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
         # Окно ручного ввода номеров (открывается при выборе "Ручной")
         self.manual_number_input = ft.TextField(
             label="Номер телефона",
@@ -626,12 +733,17 @@ class YandexRegisterApp:
             actions_alignment=ft.MainAxisAlignment.END,
         )
         page.overlay.append(self.manual_numbers_dialog)
+        page.overlay.append(self.settings_dialog)
         page.services.append(self._manual_file_picker)
         
         # Компоновка
         page.add(
-            # Заголовок
-            ft.Text("Yandex Account Registrar", size=24, weight=ft.FontWeight.BOLD),
+            # Заголовок с кнопкой настроек
+            ft.Row([
+                ft.Text("Yandex Account Registrar", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(expand=True),
+                self.settings_button,
+            ]),
             ft.Divider(height=20),
             
             # Настройки

@@ -36,22 +36,22 @@ class YandexRegistrar:
     SEL_CAPTCHA_IMAGE = "#captcha-image"
     SEL_CAPTCHA_INPUT = "#passp-field-captcha"
     
-    # Страница выбора "для кого аккаунт"
+    # Страница выбора "для кого аккаунт" (может отсутствовать)
     SEL_FOR_SELF_RADIO = "input[value='FOR_SELF']"
     SEL_FOR_WHOM_SUBMIT = "[data-testid='survey-for-whom-submit']"
     
-    # Страница ввода имени/фамилии
-    SEL_FIRSTNAME_INPUT = "input[aria-label='Имя']"
-    SEL_LASTNAME_INPUT = "input[aria-label='Фамилия']"
-    SEL_NAME_SUBMIT = "[data-testid='fln-next']"
+    # Страница ввода имени/фамилии (актуальные селекторы)
+    SEL_FIRSTNAME_INPUT = "#passp-field-firstname"
+    SEL_LASTNAME_INPUT = "#passp-field-lastname"
+    SEL_NAME_SUBMIT = "[data-t='button:action'], [data-testid='fln-next']"
     
     # Страница ввода логина
-    SEL_LOGIN_INPUT = "input[aria-label='login']"
-    SEL_LOGIN_SUBMIT = "[data-testid='auth-reg-login-next']"
+    SEL_LOGIN_INPUT = "#passp-field-login"
+    SEL_LOGIN_SUBMIT = "[data-t='button:action'], [data-testid='auth-reg-login-next']"
     
     # Страница ввода пароля
-    SEL_PASSWORD_INPUT = "input[aria-label='Пароль']"
-    SEL_PASSWORD_SUBMIT = "[data-testid='reg-password-next']"
+    SEL_PASSWORD_INPUT = "#passp-field-password"
+    SEL_PASSWORD_SUBMIT = "[data-t='button:action'], [data-testid='reg-password-next']"
     
     # Страница согласия с правилами
     SEL_EULA_CHECKBOX = "[data-testid='input'][type='checkbox']"
@@ -181,18 +181,18 @@ class YandexRegistrar:
         letters = ''.join(random.choices(string.ascii_lowercase, k=random.randint(2, 3)))
         year = str(random.randint(1985, 2005))[-2:]  # Последние 2 цифры года рождения
         
-        # Разные форматы логинов
+        # Разные форматы логинов (без нижних подчёркиваний)
         login_formats = [
             f"{first}.{last}{digits}",
             f"{last}.{first}{digits}",
-            f"{first}{last}_{digits}",
-            f"{first}_{last}{digits}",
+            f"{first}{last}{digits}",
+            f"{first}.{last}.{digits}",
             f"{first[0]}.{last}.{digits}{letters}",
-            f"{first}_{last[0]}_{digits}",
+            f"{first}.{last[0]}.{digits}",
             f"{last}{first[0]}{digits}{letters}",
             f"{first}.{last}.{year}{digits[:2]}",
             f"{first}{digits}{letters}",
-            f"{last}_{first}{year}{letters}",
+            f"{last}.{first}{year}{letters}",
         ]
         
         return random.choice(login_formats)
@@ -279,25 +279,13 @@ class YandexRegistrar:
             return False
 
     def _page_has_phone_already_registered(self) -> bool:
-        """Проверить, показывает ли страница «номер уже зарегистрирован» (кнопка «Изменить номер» или текст)"""
-        if not self.page:
-            return False
-        try:
-            if self._has_change_number_button():
-                return True
-            text = self.page.content().lower()
-            phrases = [
-                "уже зарегистрирован",
-                "уже привязан",
-                "учётная запись с этим номером",
-                "привязан к другому",
-                "зарегистрирован в другом",
-                "this phone is already",
-                "already registered",
-            ]
-            return any(p in text for p in phrases)
-        except Exception:
-            return False
+        """
+        Проверить «номер уже зарегистрирован» только по кнопке «Изменить номер».
+        Текст страницы не проверяем — фразы вроде «уже есть учётная запись» встречаются
+        на других экранах и дают ложное срабатывание, из‑за чего отменялась активация
+        и SMS не приходил.
+        """
+        return self._has_change_number_button()
 
     def _wait_for_element(self, selector: str, timeout: float = None, state: str = "visible") -> bool:
         """
@@ -508,6 +496,31 @@ class YandexRegistrar:
             self.log(f"Ошибка клика {selector}: {e}")
             return False
     
+    def _click_button_any(self, selectors: list) -> bool:
+        """
+        Попробовать кликнуть по кнопке, перебирая селекторы.
+        Также пробует get_by_role('button', name='Продолжить').
+        """
+        for sel in selectors:
+            try:
+                loc = self.page.locator(sel)
+                if loc.count() > 0:
+                    loc.first.click()
+                    return True
+            except Exception:
+                pass
+        
+        # Fallback: по роли
+        try:
+            btn = self.page.get_by_role("button", name="Продолжить")
+            if btn.count() > 0:
+                btn.first.click()
+                return True
+        except Exception:
+            pass
+        
+        return False
+    
     def _wait_and_check(self, seconds: float = 1.0) -> bool:
         """Подождать и проверить капчу"""
         time.sleep(seconds)
@@ -558,7 +571,7 @@ class YandexRegistrar:
         self.log("Нажатие 'Продолжить'...")
         
         if not self._wait_for_element(self.SEL_PHONE_SUBMIT):
-            self.log("Кнопка 'Продолжить' не найдена")
+            self.log("Кнопка «Продолжить» после ввода номера не найдена. Останавливаем.")
             return False
         
         self.page.locator(self.SEL_PHONE_SUBMIT).click()
@@ -607,7 +620,10 @@ class YandexRegistrar:
             
             time.sleep(2)
         
-        self.log("Таймаут ожидания кнопки SMS")
+        self.log(
+            "Таймаут ожидания кнопки «Звонка не было» / «Выслать СМС» — за отведённое время "
+            "кнопка не появилась или не стала активной. Останавливаем."
+        )
         return False
     
     def _request_sms_code(self) -> bool:
@@ -615,7 +631,7 @@ class YandexRegistrar:
         self.log("Запрос SMS кода...")
         
         if not self._click_element(self.SEL_NO_CALL_BUTTON):
-            self.log("Не удалось нажать кнопку запроса SMS")
+            self.log("Кнопку запроса SMS («Звонка не было» / «Выслать СМС») не нашли или не удалось нажать. Останавливаем.")
             return False
         
         time.sleep(2)
@@ -626,7 +642,7 @@ class YandexRegistrar:
         self.log(f"Ввод SMS кода: {code}")
         
         if not self._wait_for_element(self.SEL_CODE_INPUT):
-            self.log("Поле ввода кода не найдено")
+            self.log("Поле ввода SMS-кода не найдено на странице. Останавливаем.")
             return False
         
         code_input = self.page.locator(self.SEL_CODE_INPUT)
@@ -639,27 +655,34 @@ class YandexRegistrar:
     
     def _click_code_submit(self) -> bool:
         """Нажать кнопку 'Продолжить' после ввода кода"""
-        self.log("Подтверждение кода...")
+        self.log("Ищем кнопку «Продолжить» после ввода SMS-кода (селектор [data-t='button:action'])...")
         
         if self._wait_for_element(self.SEL_CODE_SUBMIT, timeout=15):
             try:
                 self.page.locator(self.SEL_CODE_SUBMIT).first.click()
                 time.sleep(2)
+                self.log("Кнопка найдена по селектору [data-t='button:action'], клик выполнен.")
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                self.log(f"Селектор [data-t='button:action'] найден, но клик упал: {e}. Пробуем по роли.")
         
-        # Пробуем клик по кнопке с текстом "Продолжить"
+        self.log("Пробуем кнопку «Продолжить» по роли get_by_role('button', name='Продолжить')...")
         try:
             btn = self.page.get_by_role("button", name="Продолжить")
             if btn.count() > 0:
                 btn.first.click()
                 time.sleep(2)
+                self.log("Кнопка найдена по роли, клик выполнен.")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            self.log(f"По роли не сработало: {e}")
         
-        self.log("Кнопка подтверждения не найдена")
+        self.log(
+            "Кнопку «Продолжить» не нашли: проверены селектор [data-t='button:action'] и "
+            "get_by_role('Продолжить') — ни один вариант не сработал. Дальше проверим, открыта ли "
+            "страница «Для кого аккаунт»: если да — продолжим (форма могла отправиться сама), "
+            "если нет — регистрация будет остановлена."
+        )
         return False
     
     def register_account(self) -> Optional[Dict[str, str]]:
@@ -767,65 +790,124 @@ class YandexRegistrar:
             if not self._click_code_submit():
                 # Возможно страница уже перешла (авто-отправка при вводе 6 цифр)
                 if self._element_exists(self.SEL_FOR_SELF_RADIO) or self._element_exists(self.SEL_FOR_WHOM_SUBMIT):
-                    self.log("Страница уже на шаге 'для кого аккаунт', продолжаем")
+                    self.log(
+                        "[Решение] Продолжаем: страница «Для кого аккаунт» уже открыта. "
+                        "Форма отправилась при вводе 6-й цифры, повторное нажатие не требуется."
+                    )
                 else:
+                    self.log(
+                        "[Решение] Останавливаем регистрацию: кнопку «Продолжить» не нашли и "
+                        "страница «Для кого аккаунт» не открыта — продолжать нечего."
+                    )
                     return None
             
             if self._check_captcha():
                 self.log("Капча после ввода кода!")
                 return None
             
-            # ==================== Шаг 10: Выбор "для себя" ====================
-            self.log("Выбор типа аккаунта...")
+            # ==================== Шаг 10: Определяем текущую страницу ====================
+            self.log("Определяем, на какой странице мы оказались после ввода кода...")
             time.sleep(2)
             
-            if self._check_captcha():
-                self.log("Капча на странице выбора!")
-                return None
-            
-            # Нажимаем radio "для себя"
-            if self._wait_for_element(self.SEL_FOR_SELF_RADIO, timeout=10):
-                self.page.locator(self.SEL_FOR_SELF_RADIO).click()
-                time.sleep(0.5)
+            # Проверяем, сразу ли мы на странице ввода имени (Яндекс может пропустить шаг «для кого»)
+            if self._element_exists(self.SEL_FIRSTNAME_INPUT):
+                self.log("Страница ввода имени обнаружена сразу (шаг «для кого аккаунт» пропущен).")
             else:
-                self.log("Кнопка 'для себя' не найдена, возможно уже выбрано")
-            
-            # Кнопка "Продолжить" на шаге "для кого аккаунт"
-            clicked = self._click_element(self.SEL_FOR_WHOM_SUBMIT)
-            if not clicked:
-                try:
-                    btn = self.page.get_by_role("button", name="Продолжить")
-                    if btn.count() > 0:
-                        btn.first.click()
-                        clicked = True
-                        time.sleep(1)
-                except Exception:
-                    pass
-            if not clicked:
-                try:
-                    # Альтернатива: кнопка по data-testid или по тексту
-                    for sel in ["[data-testid='survey-for-whom-submit']", "button:has-text('Продолжить')"]:
-                        if self.page.locator(sel).count() > 0:
-                            self.page.locator(sel).first.click()
-                            clicked = True
+                # Проверяем, есть ли страница «для кого аккаунт»
+                self.log("Проверяем наличие страницы «для кого аккаунт»...")
+                
+                if self._check_captcha():
+                    self.log("Капча на странице!")
+                    return None
+                
+                # Пробуем найти и выбрать «для себя»
+                radio_clicked = False
+                
+                # Способ 1: input[value='FOR_SELF']
+                if self._element_exists(self.SEL_FOR_SELF_RADIO):
+                    try:
+                        self.page.locator(self.SEL_FOR_SELF_RADIO).click()
+                        radio_clicked = True
+                        self.log("Выбор «для себя» найден и нажат.")
+                    except Exception:
+                        pass
+                
+                # Способ 2: по тексту "Для себя"
+                if not radio_clicked:
+                    for text in ["Для себя", "для себя"]:
+                        try:
+                            label = self.page.get_by_text(text, exact=True)
+                            if label.count() > 0:
+                                label.first.click()
+                                radio_clicked = True
+                                self.log(f"Выбор «{text}» найден по тексту и нажат.")
+                                break
+                        except Exception:
+                            pass
+                
+                # Способ 3: первая карточка/радио
+                if not radio_clicked:
+                    for sel in ["[data-t='card']", "[role='radio']", "label:has(input[type='radio'])"]:
+                        try:
+                            items = self.page.locator(sel)
+                            if items.count() > 0:
+                                items.first.click()
+                                radio_clicked = True
+                                self.log(f"Кликнули по первому элементу ({sel}).")
+                                break
+                        except Exception:
+                            pass
+                
+                if radio_clicked:
+                    time.sleep(1)
+                    # Жмём «Продолжить» на странице «для кого аккаунт»
+                    self.log("Нажимаем «Продолжить» на странице выбора типа аккаунта...")
+                    try:
+                        btn = self.page.get_by_role("button", name="Продолжить")
+                        if btn.count() > 0:
+                            btn.first.click()
+                            time.sleep(2)
+                    except Exception:
+                        pass
+                
+                # Ждём появления поля имени
+                if not self._wait_for_element(self.SEL_FIRSTNAME_INPUT, timeout=10):
+                    # Может, мы уже на странице имени, но селектор не тот — пробуем альтернативы
+                    alt_found = False
+                    for alt_sel in ["[data-t='field:input-firstname']", "input[name='firstname']", "#firstname"]:
+                        if self._element_exists(alt_sel):
+                            self.log(f"Поле имени найдено по альтернативному селектору: {alt_sel}")
+                            alt_found = True
                             break
-                except Exception:
-                    pass
-            if not clicked:
-                self.log("Не удалось нажать 'Продолжить' на выборе типа")
-                return None
-            
-            time.sleep(2)
+                    
+                    if not alt_found:
+                        current_url = self.page.url
+                        self.log(f"[Решение] Останавливаем: поле имени не найдено. URL: {current_url}")
+                        try:
+                            body_text = self.page.locator("body").inner_text()[:300]
+                            self.log(f"Текст на странице: {body_text}")
+                        except Exception:
+                            pass
+                        return None
             
             # ==================== Шаг 11: Ввод имени и фамилии ====================
-            self.log(f"Ввод имени: {first_name}")
+            self.log(f"Вводим имя: {first_name}")
             
-            if not self._wait_for_element(self.SEL_FIRSTNAME_INPUT, timeout=10):
-                self.log("Поле имени не найдено")
+            # Ищем поле имени (несколько вариантов селекторов)
+            firstname_input = None
+            for sel in [self.SEL_FIRSTNAME_INPUT, "[data-t='field:input-firstname']", "input[name='firstname']"]:
+                try:
+                    loc = self.page.locator(sel)
+                    if loc.count() > 0:
+                        firstname_input = loc.first
+                        break
+                except Exception:
+                    pass
+            
+            if not firstname_input:
+                self.log("Поле имени не найдено!")
                 return None
             
-            # Имя
-            firstname_input = self.page.locator(self.SEL_FIRSTNAME_INPUT)
             firstname_input.click()
             firstname_input.fill("")
             firstname_input.type(first_name, delay=50)
@@ -833,19 +915,49 @@ class YandexRegistrar:
             
             # Фамилия
             self.log(f"Ввод фамилии: {last_name}")
-            if not self._wait_for_element(self.SEL_LASTNAME_INPUT):
-                self.log("Поле фамилии не найдено")
+            lastname_input = None
+            for sel in [self.SEL_LASTNAME_INPUT, "[data-t='field:input-lastname']", "input[name='lastname']"]:
+                try:
+                    loc = self.page.locator(sel)
+                    if loc.count() > 0:
+                        lastname_input = loc.first
+                        break
+                except Exception:
+                    pass
+            
+            if not lastname_input:
+                self.log("Поле фамилии не найдено!")
                 return None
             
-            lastname_input = self.page.locator(self.SEL_LASTNAME_INPUT)
             lastname_input.click()
             lastname_input.fill("")
             lastname_input.type(last_name, delay=50)
             time.sleep(0.5)
             
-            # Кнопка "Далее"
-            if not self._click_element(self.SEL_NAME_SUBMIT):
-                self.log("Не удалось нажать 'Далее' после ввода имени")
+            # Кнопка "Продолжить" / "Далее"
+            self.log("Нажимаем кнопку после ввода имени...")
+            clicked = False
+            for sel in [self.SEL_NAME_SUBMIT, "[data-t='button:action']", "[data-t='button:submit']"]:
+                try:
+                    loc = self.page.locator(sel)
+                    if loc.count() > 0:
+                        loc.first.click()
+                        clicked = True
+                        break
+                except Exception:
+                    pass
+            
+            if not clicked:
+                try:
+                    btn = self.page.get_by_role("button", name="Продолжить")
+                    if btn.count() > 0:
+                        btn.first.click()
+                        clicked = True
+                except Exception:
+                    pass
+            
+            if not clicked:
+                self.log("Не удалось нажать кнопку после ввода имени")
                 return None
             
             time.sleep(2)
@@ -857,19 +969,31 @@ class YandexRegistrar:
             # ==================== Шаг 12: Ввод логина ====================
             self.log(f"Ввод логина: {login}")
             
-            if not self._wait_for_element(self.SEL_LOGIN_INPUT, timeout=10):
+            login_input = None
+            for sel in [self.SEL_LOGIN_INPUT, "[data-t='field:input-login']", "input[name='login']"]:
+                try:
+                    if self._wait_for_element(sel, timeout=5):
+                        loc = self.page.locator(sel)
+                        if loc.count() > 0:
+                            login_input = loc.first
+                            break
+                except Exception:
+                    pass
+            
+            if not login_input:
                 self.log("Поле логина не найдено")
                 return None
             
-            login_input = self.page.locator(self.SEL_LOGIN_INPUT)
             login_input.click()
             login_input.fill("")
             login_input.type(login, delay=50)
             time.sleep(0.5)
             
             # Кнопка "Продолжить"
-            if not self._click_element(self.SEL_LOGIN_SUBMIT):
-                self.log("Не удалось нажать 'Продолжить' после ввода логина")
+            self.log("Нажимаем кнопку после ввода логина...")
+            clicked = self._click_button_any(["[data-t='button:action']", "[data-t='button:submit']", self.SEL_LOGIN_SUBMIT])
+            if not clicked:
+                self.log("Не удалось нажать кнопку после ввода логина")
                 return None
             
             time.sleep(2)
@@ -881,19 +1005,31 @@ class YandexRegistrar:
             # ==================== Шаг 13: Ввод пароля ====================
             self.log("Ввод пароля...")
             
-            if not self._wait_for_element(self.SEL_PASSWORD_INPUT, timeout=10):
+            password_input = None
+            for sel in [self.SEL_PASSWORD_INPUT, "[data-t='field:input-password']", "input[name='password']", "input[type='password']"]:
+                try:
+                    if self._wait_for_element(sel, timeout=5):
+                        loc = self.page.locator(sel)
+                        if loc.count() > 0:
+                            password_input = loc.first
+                            break
+                except Exception:
+                    pass
+            
+            if not password_input:
                 self.log("Поле пароля не найдено")
                 return None
             
-            password_input = self.page.locator(self.SEL_PASSWORD_INPUT)
             password_input.click()
             password_input.fill("")
             password_input.type(password, delay=50)
             time.sleep(0.5)
             
             # Кнопка "Далее"
-            if not self._click_element(self.SEL_PASSWORD_SUBMIT):
-                self.log("Не удалось нажать 'Далее' после ввода пароля")
+            self.log("Нажимаем кнопку после ввода пароля...")
+            clicked = self._click_button_any(["[data-t='button:action']", "[data-t='button:submit']", self.SEL_PASSWORD_SUBMIT])
+            if not clicked:
+                self.log("Не удалось нажать кнопку после ввода пароля")
                 return None
             
             time.sleep(2)
@@ -904,16 +1040,61 @@ class YandexRegistrar:
             
             # ==================== Шаг 14: Согласие с правилами ====================
             self.log("Согласие с правилами...")
+            time.sleep(1)
             
-            if self._wait_for_element(self.SEL_EULA_CHECKBOX, timeout=10):
-                checkbox = self.page.locator(self.SEL_EULA_CHECKBOX)
-                if not checkbox.is_checked():
-                    checkbox.click()
-                    time.sleep(0.5)
+            # Пробуем найти и отметить чекбокс (если есть)
+            for checkbox_sel in [self.SEL_EULA_CHECKBOX, "input[type='checkbox']", "[data-t='checkbox']"]:
+                try:
+                    checkbox = self.page.locator(checkbox_sel)
+                    if checkbox.count() > 0 and not checkbox.first.is_checked():
+                        checkbox.first.click()
+                        self.log("Чекбокс правил отмечен.")
+                        time.sleep(0.5)
+                        break
+                except Exception:
+                    pass
             
-            # Кнопка "Хорошо"
-            if not self._click_element(self.SEL_EULA_SUBMIT):
-                self.log("Не удалось нажать 'Хорошо'")
+            # Кнопка "Готово" / "Хорошо" / "Принять"
+            self.log("Ищем кнопку подтверждения правил...")
+            clicked = False
+            
+            # Пробуем по селекторам
+            for sel in [self.SEL_EULA_SUBMIT, "[data-t='button:action']", "[data-t='button:submit']", "[data-testid='eula-accept']"]:
+                try:
+                    loc = self.page.locator(sel)
+                    if loc.count() > 0:
+                        loc.first.click()
+                        clicked = True
+                        self.log(f"Кнопка нажата по селектору: {sel}")
+                        break
+                except Exception:
+                    pass
+            
+            # Пробуем по тексту кнопки
+            if not clicked:
+                for btn_text in ["Готово", "Хорошо", "Принять", "Подтвердить", "OK"]:
+                    try:
+                        btn = self.page.get_by_role("button", name=btn_text)
+                        if btn.count() > 0:
+                            btn.first.click()
+                            clicked = True
+                            self.log(f"Кнопка «{btn_text}» нажата.")
+                            break
+                    except Exception:
+                        pass
+            
+            # Пробуем любую видимую кнопку на странице
+            if not clicked:
+                try:
+                    btn = self.page.locator("button:visible").first
+                    btn.click()
+                    clicked = True
+                    self.log("Нажали первую видимую кнопку на странице.")
+                except Exception:
+                    pass
+            
+            if not clicked:
+                self.log("Не удалось нажать кнопку подтверждения правил")
                 return None
             
             time.sleep(2)
