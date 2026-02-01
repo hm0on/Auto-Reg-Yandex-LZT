@@ -29,6 +29,7 @@ class YandexRegistrar:
     
     # Страница подтверждения (звонок/SMS)
     SEL_CODE_INPUT = "#passp-field-phoneCode"
+    SEL_CODE_INPUT_SEGMENT = "[data-testid='code-field-segment']"  # Для не-RU стран (сегментированный ввод)
     SEL_CODE_SUBMIT = "[data-t='button:action']"
     SEL_NO_CALL_BUTTON = "[data-t='button:default:retry-to-request-code']"
 
@@ -638,20 +639,34 @@ class YandexRegistrar:
         return True
     
     def _enter_sms_code(self, code: str) -> bool:
-        """Ввести SMS код"""
+        """Ввести SMS код (поддержка обычного поля и сегментированного ввода)"""
         self.log(f"Ввод SMS кода: {code}")
         
-        if not self._wait_for_element(self.SEL_CODE_INPUT):
-            self.log("Поле ввода SMS-кода не найдено на странице. Останавливаем.")
-            return False
+        # Способ 1: обычное поле ввода (#passp-field-phoneCode)
+        if self._element_exists(self.SEL_CODE_INPUT):
+            self.log("Найдено обычное поле ввода кода.")
+            code_input = self.page.locator(self.SEL_CODE_INPUT)
+            code_input.click()
+            code_input.fill("")
+            code_input.type(code, delay=50)
+            time.sleep(0.5)
+            return True
         
-        code_input = self.page.locator(self.SEL_CODE_INPUT)
-        code_input.click()
-        code_input.fill("")
-        code_input.type(code, delay=50)
-        time.sleep(0.5)
+        # Способ 2: сегментированный ввод (для не-RU стран)
+        segments = self.page.locator(self.SEL_CODE_INPUT_SEGMENT)
+        if segments.count() > 0:
+            self.log(f"Найдено сегментированное поле ввода ({segments.count()} сегментов).")
+            # Кликаем на первый сегмент и вводим весь код — он автоматически распределится
+            segments.first.click()
+            time.sleep(0.3)
+            for digit in code:
+                self.page.keyboard.type(digit, delay=100)
+                time.sleep(0.1)
+            time.sleep(0.5)
+            return True
         
-        return True
+        self.log("Поле ввода SMS-кода не найдено на странице. Останавливаем.")
+        return False
     
     def _click_code_submit(self) -> bool:
         """Нажать кнопку 'Продолжить' после ввода кода"""
@@ -758,17 +773,23 @@ class YandexRegistrar:
                 self.log("Капча после отправки номера!")
                 return None
 
-            # ==================== Шаг 5: Ждём кнопку "Звонка не было" ====================
-            if not self._wait_for_sms_option():
-                return None
-            
-            # ==================== Шаг 6: Запрашиваем SMS ====================
-            if not self._request_sms_code():
-                return None
-            
-            if self._check_captcha():
-                self.log("Капча после запроса SMS!")
-                return None
+            # ==================== Шаг 5-6: Ждём SMS (зависит от страны) ====================
+            # Для RU: Яндекс сначала пытается позвонить, нужно ждать и нажать "Звонка не было"
+            # Для других стран: SMS приходит сразу, пропускаем ожидание
+            if config.SMS_COUNTRY.lower() == "ru":
+                self.log("Страна RU — ждём возможность запросить SMS...")
+                if not self._wait_for_sms_option():
+                    return None
+                
+                if not self._request_sms_code():
+                    return None
+                
+                if self._check_captcha():
+                    self.log("Капча после запроса SMS!")
+                    return None
+            else:
+                self.log(f"Страна {config.SMS_COUNTRY.upper()} — SMS отправляется сразу, пропускаем ожидание звонка.")
+                time.sleep(2)  # Небольшая пауза для отправки SMS
             
             # ==================== Шаг 7: Ожидаем SMS код ====================
             if self.sms_mode == "auto":
@@ -1121,6 +1142,14 @@ class YandexRegistrar:
             self.log(f"Телефон: {self.current_phone}")
             self.log(f"Имя: {first_name} {last_name}")
             
+            # Получаем cookies для входа в аккаунт
+            cookies = []
+            try:
+                cookies = self.context.cookies()
+                self.log(f"Получено {len(cookies)} cookies")
+            except Exception as e:
+                self.log(f"Ошибка получения cookies: {e}")
+            
             return {
                 "login": login,
                 "password": password,
@@ -1128,7 +1157,8 @@ class YandexRegistrar:
                 "first_name": first_name,
                 "last_name": last_name,
                 "gender": gender,
-                "status": "created"
+                "status": "created",
+                "cookies": cookies
             }
             
         except PlaywrightTimeout:

@@ -8,7 +8,7 @@ SPANCH_API_KEY = ""
 
 # Настройки SMS
 SMS_SERVICE = "yandex"  # Название сервиса для Spanch API
-SMS_COUNTRY = "ru"      # Страна для номера
+SMS_COUNTRY = "uz"      # Страна для номера
 SMS_GATEWAY = "bob"     # Шлюз (можно изменить: crabbs, bob, ocean, gary, plankton, squidward, sandy, patrick)
 SMS_MAX_PRICE = 1       # Максимальная цена номера в USD (баланс должен быть >= этой суммы)
 

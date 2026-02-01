@@ -532,11 +532,29 @@ class YandexRegisterApp:
             self.update_status("Остановлено")
             
     def _save_accounts(self, accounts: list) -> None:
-        """Сохранить аккаунты в файл"""
-        with open(config.OUTPUT_FILE, "a", encoding="utf-8") as f:
-            for acc in accounts:
-                line = f"{acc['login']}:{acc['password']}:{acc.get('phone', 'N/A')}\n"
+        """Сохранить аккаунты и cookies в файлы"""
+        import json
+        from datetime import datetime
+        
+        for acc in accounts:
+            login = acc.get('login', 'unknown')
+            cookies = acc.get('cookies', [])
+            
+            # Сохраняем cookies в отдельный JSON файл
+            if cookies:
+                cookies_filename = f"cookies_{login}.json"
+                try:
+                    with open(cookies_filename, "w", encoding="utf-8") as f:
+                        json.dump(cookies, f, indent=2, ensure_ascii=False)
+                    self.log(f"Cookies сохранены: {cookies_filename}")
+                except Exception as e:
+                    self.log(f"Ошибка сохранения cookies: {e}")
+            
+            # Сохраняем информацию об аккаунте в текстовый файл
+            with open(config.OUTPUT_FILE, "a", encoding="utf-8") as f:
+                line = f"{login}:{acc['password']}:{acc.get('phone', 'N/A')} | cookies: cookies_{login}.json\n"
                 f.write(line)
+        
         self.log(f"Аккаунты сохранены в {config.OUTPUT_FILE}")
         
     def stop_registration(self, e=None) -> None:
