@@ -3,11 +3,17 @@
 """
 
 import os
+from pathlib import Path
 
 # API Spanch SMS
 SPANCH_API_URL = "https://spanch-projects.com/api"
-# Store the real credential outside the repository.
-SPANCH_API_KEY = ""
+# Store the real credential outside the repository, either in the environment
+# or in the local ignored file used by the GUI settings dialog.
+SPANCH_API_KEY_FILE = "spanch_api_key.txt"
+_api_key_file = Path(SPANCH_API_KEY_FILE)
+SPANCH_API_KEY = os.getenv("SPANCH_API_KEY", "").strip()
+if not SPANCH_API_KEY and _api_key_file.exists():
+    SPANCH_API_KEY = _api_key_file.read_text(encoding="utf-8").strip()
 
 # Настройки SMS
 SMS_SERVICE = "yandex"  # Название сервиса для Spanch API

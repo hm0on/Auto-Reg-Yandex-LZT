@@ -397,25 +397,10 @@ class YandexRegisterApp:
         config.SMS_MAX_PRICE = new_max_price
         config.HEADLESS_MODE = new_headless
         
-        # Сохраняем в файл config.py
-        config_path = Path(__file__).parent.parent / "config.py"
+        # Сохраняем ключ в отдельный локальный файл, не в config.py.
+        api_key_path = Path(__file__).parent.parent / config.SPANCH_API_KEY_FILE
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            
-            new_lines = []
-            for line in lines:
-                if line.strip().startswith("SPANCH_API_KEY"):
-                    new_lines.append(f'SPANCH_API_KEY = "{new_api_key}"\n')
-                elif line.strip().startswith("SMS_MAX_PRICE"):
-                    new_lines.append(f"SMS_MAX_PRICE = {new_max_price}\n")
-                elif line.strip().startswith("HEADLESS_MODE"):
-                    new_lines.append(f"HEADLESS_MODE = {new_headless}\n")
-                else:
-                    new_lines.append(line)
-            
-            with open(config_path, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
+            api_key_path.write_text(new_api_key + "\n", encoding="utf-8")
             
             self.log("Настройки сохранены")
         except Exception as ex:

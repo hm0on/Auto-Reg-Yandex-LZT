@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .env
 .env.*
+spanch_api_key.txt
 
 # Local credentials and personal data
 accounts.txt
