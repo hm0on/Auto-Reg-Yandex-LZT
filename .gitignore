@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# Local credentials and personal data
+accounts.txt
+numbers.txt
+proxys.txt
+cookies_*.json
+
+# Runtime output
+logs*.txt
+*.log
+storage/

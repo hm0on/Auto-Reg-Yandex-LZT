@@ -1,0 +1,4 @@
+# One proxy per line, for example:
+# http://user:password@proxy.example:8080
+# socks5://proxy.example:1080
+# Keep real proxy credentials in the ignored proxys.txt file.

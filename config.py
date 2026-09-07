@@ -2,8 +2,11 @@
 Конфигурация приложения
 """
 
+import os
+
 # API Spanch SMS
 SPANCH_API_URL = "https://spanch-projects.com/api"
+# Store the real credential outside the repository.
 SPANCH_API_KEY = ""
 
 # Настройки SMS
